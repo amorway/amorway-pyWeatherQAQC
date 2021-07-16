@@ -3,8 +3,10 @@ import math
 import datetime as dt
 import logging as log
 from . import plotting_functions
-
-from bokeh.plotting import save, show
+from bokeh.layouts import gridplot
+from bokeh.plotting import output_file, save, show
+from click import echo, prompt
+from scipy.stats import boxcox, shapiro, normaltest
 
 
 def additive_corr(log_writer, start, end, var_one, var_two):
@@ -26,7 +28,8 @@ def additive_corr(log_writer, start, end, var_one, var_two):
     corr_var_one = np.array(var_one)
     corr_var_two = np.array(var_two)
 
-    mod = float(input("\nEnter the additive modifier you want to apply to all values: "))
+    mod = prompt('Enter the additive modifier you want to apply to values in selected interval', type=float)
+
     corr_var_one[start:end] = var_one[start:end] + mod
     corr_var_two[start:end] = var_two[start:end] + mod
     log_writer.write('Selected correction interval started at %s and ended at %s. \n' % (start, end))
@@ -35,21 +38,18 @@ def additive_corr(log_writer, start, end, var_one, var_two):
     return corr_var_one, corr_var_two
 
 
-def generate_corr_menu(code, auto_corr, first_pass):
+def generate_corr_menu(code):
     """
         Generates menu and obtains user selection on how they want to correct the variables they have provided
 
         Parameters:
             code : integer code passed by main script that indicates what type of data has been passed
-            auto_corr : flag for whether or not automatic correction has been enabled
-            first_pass : flag for if this is the first iteration of correction or not
+
 
         Returns:
             choice : integer of user selection on how they want to correct data
-            first_pass : flag for if this is the first iteration of correction or not
 
     """
-    corr_method = '   To skip correcting this data, enter 4.'
 
     # code value is unordered here but matches what is expected by plotting functions
     if code == 1 or code == 2:
@@ -57,8 +57,10 @@ def generate_corr_menu(code, auto_corr, first_pass):
         corr_method = '   To remove outliers using a modified z-score approach, enter 4 (Recommended).'
     elif code == 3:
         var_type = 'wind speed'
+        corr_method = '   To log-transform, remove outliers, and remove flat sections, enter 4 (Recommended).'
     elif code == 4:
         var_type = 'precipitation'
+        corr_method = '   To skip correcting this data, enter 4.'
     elif code == 5:
         var_type = 'solar radiation'
         corr_method = '   To correct based on periodic percentile intervals, enter 4 (Recommended).'
@@ -69,32 +71,29 @@ def generate_corr_menu(code, auto_corr, first_pass):
         corr_method = '   To correct based on yearly percentiles, enter 4 (Recommended).'
     elif code == 9:
         var_type = 'relative humidity'
+        corr_method = '   To skip correcting this data, enter 4.'
     else:
         raise ValueError('Unsupported code type {} passed to qaqc_functions.'.format(code))
 
-    print('\nPlease select the method to use to correct this {} data:'
-          '\n   For user-defined additive value correction, enter 1.'
-          '\n   For user-defined multiplicative value correction, enter 2.'
-          '\n   To set everything in this interval to NaN, enter 3.'.format(var_type))
-    print(corr_method)
 
-    if auto_corr != 0 and first_pass == 1:  # automatic pass enabled
-        choice = 4
-        loop = 0
-        first_pass = 0
-        print('\n Automatic first-pass correction is being performed, option 4 selected. \n')
-    else:
-        choice = int(input("Enter your selection: "))
-        loop = 1
+    echo('\nPlease select the method to use to correct this {} data:'
+         '\n   For user-defined additive value correction, enter 1.'
+         '\n   For user-defined multiplicative value correction, enter 2.'
+         '\n   To set everything in this interval to NaN, enter 3.'.format(var_type))
+    echo(corr_method)
+
+
+    choice = prompt('\nEnter your selection', type=int, default=4)
+    loop = 1
 
     while loop:
         if 1 <= choice <= 4:
             loop = 0
         else:
-            print('Please enter a valid option.')
-            choice = int(input('Specify which variable you would like to correct: '))
+            echo('Please enter a valid option.')
+            choice = prompt('\nEnter your selection', type=int, default=4)
 
-    return choice, first_pass
+    return choice
 
 
 def generate_interval(var_size):
@@ -108,20 +107,28 @@ def generate_interval(var_size):
             int_start : integer of index user wants to start correction on
             int_end : integer of index user wants to end correction on
     """
-    print('\nPlease enter the starting index of your correction interval.'
-          '\n   You may also enter -1 to select all data points.')
+    echo('\nPlease enter the starting index of your correction interval.'
+         '\nYou may also enter [-1] to select all data points.')
 
-    int_start = int(input("Enter your starting index: "))
+    int_start = prompt('Enter your starting index', type=int, default=-1)
     if int_start == -1:
         int_start = 0
         int_end = var_size
     else:
-        int_end = int(input("Enter your ending index: "))
+        int_end = prompt('Enter your ending index', type=int)
         # Check that user didn't select past the end of record.
         if int_end > var_size:
             int_end = var_size
         else:
             pass
+        # Check that user didn't invert start and end index
+        if int_start > int_end:
+            temp_int_var = int_start
+            int_start = int_end
+            int_end = temp_int_var
+        else:
+            pass
+
     return int_start, int_end
 
 
@@ -144,7 +151,7 @@ def multiplicative_corr(log_writer, start, end, var_one, var_two):
     corr_var_one = np.array(var_one)
     corr_var_two = np.array(var_two)
 
-    mod = float(input("\nEnter the multiplicative modifier you want to apply to all values: "))
+    mod = prompt('Enter the multiplicative modifier you want to apply to values in selected interval', type=float)
     corr_var_one[start:end] = var_one[start:end] * mod
     corr_var_two[start:end] = var_two[start:end] * mod
     log_writer.write('Selected correction interval started at %s and ended at %s. \n' % (start, end))
@@ -250,12 +257,130 @@ def temp_find_outliers(log_writer, t_var_one, var_one_name, t_var_two, var_two_n
         var_two_total_outliers = var_two_total_outliers + var_two_outlier_count
         k += 1
 
-    print('{0} outliers were removed on variable {1}.'.format(var_one_total_outliers, var_one_name))
-    print('{0} outliers were removed on variable {1}.'.format(var_two_total_outliers, var_two_name))
+    echo('{0} outliers were removed on variable {1}.'.format(var_one_total_outliers, var_one_name))
+    echo('{0} outliers were removed on variable {1}.'.format(var_two_total_outliers, var_two_name))
     log_writer.write('{0} outliers were removed on variable {1}. \n'.format(var_one_total_outliers, var_one_name))
     log_writer.write('{0} outliers were removed on variable {1}. \n'.format(var_two_total_outliers, var_two_name))
 
     return corrected_var_one, corrected_var_two
+
+
+def wind_find_outliers_and_flats(log_writer, wind_obs):
+    """
+        First parses wind data to remove any flat sections, which are defined in this program as a number of days
+        with the same exact observation. Sections identified as flat and set to nan.
+
+        Second, transforms wind data from lognormal to normal distribution, then uses a modified z-score approach to
+        automatically detect outliers and set them to nan. Data is then converted back to a lognormal distribution.
+
+        Parameters:
+            log_writer : logging object that will report corrections made to the log file
+            wind_obs : 1d array of wind data
+
+        Returns:
+
+
+    """
+    alpha = 0.05  # alpha level for shapiro test
+    flat_obs_treshold = 5  # number of subsequent identical observations we are willing to tolerate before removing them
+
+    log_writer.write('User has opted to use a modified z-score approach to identify and remove outliers. \n')
+
+    orig_wind_obs = np.array(wind_obs)  # wind observations before any modifications
+    flat_free_wind_obs = np.array(wind_obs)
+
+    # parse through wind array and find flat sections
+    total_flat_obs_removed = 0
+    for i in range(len(flat_free_wind_obs)):
+
+        observation = flat_free_wind_obs[i]
+
+        # prevent an oob error
+        if i+1 < len(flat_free_wind_obs):
+            # check to see if subsequent observations have the same value
+            if flat_free_wind_obs[i+1] == observation and not np.isnan(observation):
+                # count how many values are equivalent
+                k = i
+                while True:
+                    if flat_free_wind_obs[k] == observation and k+1 < len(flat_free_wind_obs):
+                        k += 1
+                    else:
+                        break
+
+                if (k - i) <= flat_obs_treshold:
+                    # threshold not met, do nothing
+                    pass
+                else:
+                    # treshold met, remove values
+                    flat_free_wind_obs[i:k] = np.nan
+                    total_flat_obs_removed += k - i
+            else:
+                # end of array, pass
+                pass
+    echo('{0} total flat observations were removed from windspeed.'.format(total_flat_obs_removed))
+    log_writer.write('{0} total flat observations were removed from windspeed.'.format(total_flat_obs_removed))
+
+    normal_transformed_wind_obs = boxcox(flat_free_wind_obs, 0)  # transform data with log-transform
+
+    # use shapiro test for normality
+    orig_stat, orig_p = normaltest(orig_wind_obs, axis=0, nan_policy='omit')
+    trans_stat, trans_p = normaltest(normal_transformed_wind_obs, axis=0, nan_policy='omit')
+
+    #todo remove tests and histograms
+    test_normal_data = np.random.normal(0, 0.1, 2000)
+    test_stat, test_p = normaltest(test_normal_data, axis=0, nan_policy='omit')
+    if test_p > alpha:
+        # large possibility the sample came from a normal distribution
+        echo('test data was likely normally distributed, this is expected')
+        echo(test_p)
+    else:
+        echo('test data was NOT likely normally distributed, this is NOT EXPECTED')
+        echo(test_p)
+
+    if orig_p > alpha:
+        # large possibility the sample came from a normal distribution
+        echo('original wind was likely normally distributed, this is NOT EXPECTED')
+        echo(orig_p)
+    else:
+        echo('original wind was NOT likely normally distributed, this is expected')
+        echo(orig_p)
+
+    if trans_p > alpha:
+        # large possibility the sample came from a normal distribution
+        echo('transformed wind was likely normally distributed, this is expected')
+        echo(trans_p)
+    else:
+        echo('transformed wind was NOT likely normally distributed, this is NOT EXPECTED')
+        echo(trans_p)
+
+    corrected_normally_dist_wind_obs, outlier_count = modified_z_score_outlier_detection(normal_transformed_wind_obs)
+
+    echo('{0} outliers were removed from windspeed.'.format(outlier_count))
+    log_writer.write('{0} outliers were removed from windspeed. \n'.format(outlier_count))
+
+    final_reverted_uz = np.exp(corrected_normally_dist_wind_obs)
+    # Testing code for log transform, will remove eventually
+    orig_ws_hist = plotting_functions.histogram_plot(orig_wind_obs[~np.isnan(orig_wind_obs)], 'orig_uz', 'black', 'm/s')
+
+    no_flats_ws_hist = plotting_functions.histogram_plot(wind_obs[~np.isnan(flat_free_wind_obs)], 'no_flat_uz', 'black', 'm/s')
+
+    trans_ws_hist = plotting_functions.histogram_plot(
+        normal_transformed_wind_obs[~np.isnan(normal_transformed_wind_obs)], 'trans_uz', 'black', 'm/s')
+    output_file('wind_testing/' + 'histograms.html', title='testing histograms')
+
+    corr_trans_hist = plotting_functions.histogram_plot(
+        corrected_normally_dist_wind_obs[~np.isnan(corrected_normally_dist_wind_obs)], 'corr_trans_uz', 'black', 'm/s')
+
+    final_hist = plotting_functions.histogram_plot(final_reverted_uz[~np.isnan(final_reverted_uz)],
+                                                      'final_reverted_uz', 'black', 'm/s')
+
+    output_file('wind_testing/' + 'histograms.html', title='testing histograms')
+
+    save(gridplot([orig_ws_hist, no_flats_ws_hist, trans_ws_hist, corr_trans_hist, final_hist],
+                  ncols=4, plot_width=400,
+                  plot_height=400, toolbar_location=None))
+
+    return final_reverted_uz
 
 
 def rh_yearly_percentile_corr(log_writer, start, end, rhmax, rhmin, year, percentage):
@@ -312,8 +437,8 @@ def rh_yearly_percentile_corr(log_writer, start, end, rhmax, rhmin, year, percen
         rh_sample_indexes = rh_year_sorted[-rh_values_to_pull:]
         rh_corr_per_year[k] = 100 / np.nanmean(rh_year[rh_sample_indexes])
 
-        print("{0} days were included in year {1} of the RH correction process."
-              .format(rh_year.size, unique_years[k]))
+        echo("{0} days were included in year {1} of the RH correction process."
+             .format(rh_year.size, unique_years[k]))
 
     # Check to see if the years are lined up, Ex. data file starts in 2001 but correction starts in 2004
     offset = 0
@@ -365,9 +490,9 @@ def rh_yearly_percentile_corr(log_writer, start, end, rhmax, rhmin, year, percen
         else:
             pass
 
-    print("\n" + str(rhmax_cutoff) + " RHMax data points were removed for exceeding the logical limit of 100%.")
-    print("\n" + str(rhmin_cutoff) + " RHMin data points were removed for exceeding the logical limit of 100%.")
-    print("\n" + str(invert_max_min_cutoff) + " indexes were removed because RHMax was less than RHMin.")
+    echo("\n" + str(rhmax_cutoff) + " RHMax data points were removed for exceeding the logical limit of 100%.")
+    echo("\n" + str(rhmin_cutoff) + " RHMin data points were removed for exceeding the logical limit of 100%.")
+    echo("\n" + str(invert_max_min_cutoff) + " indexes were removed because RHMax was less than RHMin.")
     log_writer.write('Year-based RH correction used the top %s percentile (%s points for a full year), '
                      'RHMax had %s points exceed 100 percent.'
                      ' RHMin had %s points exceed 100 percent. \n'
@@ -480,13 +605,13 @@ def rs_period_ratio_corr(log_writer, start, end, rs, rso, sample_size_per_period
                         # only nans are left, have to quit loop and throw out the data
                         invalid_period = 1
                         despike_loop = 0
-                        print('\nA period was thrown out due to insufficient data, failed finding valid point # %s '
-                              ' out of the required %s.' % (i + 1, sample_size_per_period))
+                        echo('\nA period was thrown out due to insufficient data, failed finding valid point # %s '
+                             ' out of the required %s.' % (i + 1, sample_size_per_period))
                         break
             else:
                 # there is not enough data in this final period to compute correction data
-                print('\nA period was thrown out due to insufficient data, either because it had no valid ratios,'
-                      'or because it had less than %s days.' % sample_size_per_period)
+                echo('\nA period was thrown out due to insufficient data, either because it had no valid ratios,'
+                     'or because it had less than %s days.' % sample_size_per_period)
                 invalid_period = 1
                 despike_loop = 0
 
@@ -509,8 +634,8 @@ def rs_period_ratio_corr(log_writer, start, end, rs, rso, sample_size_per_period
                     # non-likely-spike then something is obviously wrong with this period.
                     invalid_period = 1
                     despike_loop = 0
-                    print('\nA period was thrown out due to failing to find a sufficient '
-                          'number of valid values when testing for despiking.')
+                    echo('\nA period was thrown out due to failing to find a sufficient '
+                         'number of valid values when testing for despiking.')
 
                 rs_avg = np.nanmean(rs_period[max_ratio_indexes[cf_index_start:cf_index_end]])
                 rso_avg = np.nanmean(rso_period[max_ratio_indexes[cf_index_start:cf_index_end]])
@@ -549,10 +674,10 @@ def rs_period_ratio_corr(log_writer, start, end, rs, rso, sample_size_per_period
 
                     # check for the rarer rule occuring:
                     if not new_cf_significant_change and rs_avg_greatly_exceeds_rso_avg:
-                        print('\nWARNING: The rule for rs greatly exceeding rso was triggered without triggering the'
-                              ' significant change to correction factor rule. Look at the data to make sure the data'
-                              ' has a lot of voltage spikes. Period was {} starting around {} and ending around {}. \n'
-                              .format(count_three, (count_one - period), count_one))
+                        echo('\nWARNING: The rule for rs greatly exceeding rso was triggered without triggering the'
+                             ' significant change to correction factor rule. Look at the data to make sure the data'
+                             ' has a lot of voltage spikes. Period was {} starting around {} and ending around {}. \n'
+                             .format(count_three, (count_one - period), count_one))
 
                     # increment indexes and keep iterating for more spikes
                     cf_index_start += 1
@@ -583,8 +708,8 @@ def rs_period_ratio_corr(log_writer, start, end, rs, rso, sample_size_per_period
                 period_corr[count_three] = np.nan
                 insufficient_period_counter += 1
                 insufficient_data_counter += removed_points
-                print('\nThis insufficient period contained %s datapoints for Rs, which have been set to nan.'
-                      % removed_points)
+                echo('\nThis insufficient period contained %s datapoints for Rs, which have been set to nan.'
+                     % removed_points)
 
             # add this period's rs data, which has potentially been thrown out or despiked, to the new interval of rs
             despiked_rs_interval = np.append(despiked_rs_interval, rs_period)
@@ -660,19 +785,19 @@ def rs_period_ratio_corr(log_writer, start, end, rs, rso, sample_size_per_period
             y = 1
             z += 1
 
-    print('\n%s data points were removed as part of the despiking process. \n' % despike_counter)
+    echo('\n%s data points were removed as part of the despiking process. \n' % despike_counter)
 
-    print('\n%s Rs data points were removed due to their correction factor exceeding a '
-          '50 percent relative increase or decrease. \n' % correction_cutoff_counter)
+    echo('\n%s Rs data points were removed due to their correction factor exceeding a '
+         '50 percent relative increase or decrease. \n' % correction_cutoff_counter)
 
-    print('\n%s Rs data points in %s different periods were removed due to insufficient data present in either Rs or '
-          'Rso to compute a correction factor. \n' % (insufficient_data_counter, insufficient_period_counter))
+    echo('\n%s Rs data points in %s different periods were removed due to insufficient data present in either Rs or '
+         'Rso to compute a correction factor. \n' % (insufficient_data_counter, insufficient_period_counter))
 
-    print('\n%s Rs data points were clipped to Rso due to exceeding 1.03 * Rso after correction.'
-          % rso_clipping_counter)
+    echo('\n%s Rs data points were clipped to Rso due to exceeding 1.03 * Rso after correction.'
+         % rso_clipping_counter)
 
-    print('\n%s Rs data points were unchanged due to the correction factor being between 0.97 and 1.03.'
-          % unchanged_data_counter)
+    echo('\n%s Rs data points were unchanged due to the correction factor being between 0.97 and 1.03.'
+         % unchanged_data_counter)
 
     log_writer.write('Periodic ratio-based Rs corrections were applied,'
                      ' period length was %s, and correction sample size was %s. \n'
@@ -690,7 +815,7 @@ def rs_period_ratio_corr(log_writer, start, end, rs, rso, sample_size_per_period
     return corr_rs, rso
 
 
-def correction(station, log_path, folder_path, var_one, var_two, dt_array, month, year, code, auto_corr=0):
+def correction(station, log_path, folder_path, var_one, var_two, dt_array, month, year, code):
     """
             This main qaqc function takes in two variables and, depending on the code provided, enables different
             correction methods for the user to use to correct data. Once a correction has been applied, user has the
@@ -710,14 +835,12 @@ def correction(station, log_path, folder_path, var_one, var_two, dt_array, month
                 month : 1D numpy array of month values
                 year : 1D numpy array of year values
                 code : integer that is used to determine what variables are actually passed as var_one and var_two
-                auto_corr : int flag for the "automatic first pass" mode, which auto-applies default correction first
 
             Returns:
                 corr_var_one : 1D numpy array of corrected var_one values
                 corr_var_two : 1D numpy array of corrected var_two values
     """
     correction_loop = 1
-    first_pass = 1  # boolean flag for whether or not it is the first pass, used in automation with auto_corr
     var_size = var_one.shape[0]
     backup_var_one = np.array(var_one)
     backup_var_two = np.array(var_two)
@@ -738,12 +861,9 @@ def correction(station, log_path, folder_path, var_one, var_two, dt_array, month
 
     ####################
     # Generate Before-Corrections Graph
-    if first_pass == 1 and auto_corr != 0:  # first automatic pass, skip plotting variables for now
-        pass
-    else:
-        corr_fig = plotting_functions.variable_correction_plots(station, dt_array, var_one, corr_var_one, var_two,
-                                                                corr_var_two, code, folder_path)
-        show(corr_fig)
+    corr_fig = plotting_functions.variable_correction_plots(station, dt_array, var_one, corr_var_one, var_two,
+                                                            corr_var_two, code, folder_path)
+    show(corr_fig)
 
     ####################
     # Correction Loop
@@ -752,15 +872,9 @@ def correction(station, log_path, folder_path, var_one, var_two, dt_array, month
         ####################
         # Interval and Correction Method Selection
         # Determine what subset of data the user wants to correct, then determine how they want to do it.
+        (int_start, int_end) = generate_interval(var_size)
 
-        if first_pass == 1 and auto_corr != 0:  # first automatic pass, select full bracket
-            int_start = 0
-            int_end = var_size
-        else:
-            (int_start, int_end) = generate_interval(var_size)
-
-        (choice, first_pass) = generate_corr_menu(code, auto_corr, first_pass)
-
+        choice = generate_corr_menu(code)
         if choice == 1:
             (corr_var_one, corr_var_two) = additive_corr(corr_log, int_start, int_end, var_one, var_two)
         elif choice == 2:
@@ -770,27 +884,26 @@ def correction(station, log_path, folder_path, var_one, var_two, dt_array, month
         elif choice == 4 and (code == 1 or code == 2):
             (corr_var_one, corr_var_two) = temp_find_outliers(corr_log, var_one, var_one_name, var_two, var_two_name,
                                                               month)
+        elif choice == 4 and (code == 3):
+            corr_var_one = wind_find_outliers_and_flats(corr_log, var_one)
+
         elif choice == 4 and code == 8:
-            if auto_corr != 0:
-                corr_percentile = 1
-            else:
-                corr_percentile = int(input('\nEnter which top percentile you want to base corrections on (rec. 1): '))
+            corr_percentile = prompt('\nEnter which top percentile you want to base corrections on (rec. 1)',
+                                     type=float, default=1)
 
             (corr_var_one, corr_var_two) = rh_yearly_percentile_corr(corr_log, int_start, int_end, var_one, var_two,
                                                                      year, corr_percentile)
         elif choice == 4 and code == 5:
-            if auto_corr != 0:
-                corr_period = 60
-                corr_sample = 6
-            else:
-                corr_period = int(input('\nEnter the number of days each correction period will last (rec. 60): '))
-                corr_sample = int(input('\nEnter the number of points per period to correct based on (rec 6): '))
+            corr_period = prompt('\nEnter the number of days each correction period will last (rec. 60)',
+                                 type=int, default=60)
+            corr_sample = prompt('\nEnter the number of points per period to correct based on (rec. 6)',
+                                 type=int, default=6)
 
             (corr_var_one, corr_var_two) = rs_period_ratio_corr(corr_log, int_start, int_end, var_one, var_two,
                                                                 corr_sample, corr_period)
 
-        elif choice == 4 and (code == 3 or code == 4 or code == 7 or code == 9):
-            # Data is either uz, precip, ea, or rhavg and user doesn't want to correct it.
+        elif choice == 4 and (code == 4 or code == 7 or code == 9):
+            # Data is either precip, ea, or rhavg and user doesn't want to correct it.
             corr_log.write('Selected correction interval started at %s and ended at %s. \n' % (int_start, int_end))
             corr_log.write('User decided to skip this interval without correcting it. \n')
         else:
@@ -804,25 +917,22 @@ def correction(station, log_path, folder_path, var_one, var_two, dt_array, month
                                                                 corr_var_two, code, folder_path)
         show(corr_fig)
 
-        if auto_corr == 1 or auto_corr == 0:
-            auto_corr = 0  # set to 0 to prevent another automatic correction loop
-
         ####################
         # Determine if user wants to keep correcting
-        print('\nAre you done correcting?'
-              '\n   Enter 1 for yes.'
-              '\n   Enter 2 for another iteration.'
-              '\n   Enter 3 to start over.'
-              '\n   Enter 4 to discard all changes.')
+        echo('\nAre you done correcting?'
+             '\n   Enter 1 for yes.'
+             '\n   Enter 2 for another iteration.'
+             '\n   Enter 3 to start over.'
+             '\n   Enter 4 to discard all changes.')
 
-        choice = int(input("Enter your selection: "))
+        choice = prompt("Enter your selection", type=int, default=1)
         loop = 1
         while loop:
             if 1 <= choice <= 4:
                 loop = 0
             else:
-                print('Please enter a valid option.')
-                choice = int(input('Enter your selection: '))
+                echo('Please enter a valid option.')
+                choice = prompt("Enter your selection", type=int, default=1)
 
         if choice == 1:
             correction_loop = 0
@@ -917,51 +1027,61 @@ def compiled_humidity_adjustment(station, log_path, folder_path, dt_array, tmax,
     ####################
     # Adjustment Loop
     # User gets to repeat this process as many times as they want
-    while adjustment_loop:
 
-        ####################
+    # Use which variables are provided by dataset to choose default response
+    if rhmax_col != -1 and rhmin_col != -1:
+        # can use percentile-corrected RHmax+RHmin
+        default_response = 3
+    elif (rhmax_col == -1 or rhmin_col == -1) and tdew_col != -1:
+        # no RHmax+RHmin, but can use outlier-free TDew
+        default_response = 2
+    else:
+        # no variable with statistically-based corrections provided, so skip instead
+        default_response = 6
+
+    while adjustment_loop:
         # First the user will select an interval, then they will choose a variable to copy from.
 
         (int_start, int_end) = generate_interval(var_size)
 
-        print('\nPlease select which variable you want to use for this interval:'
-              '\n   To use Ea data provided by the input file, enter 1.'
-              '\n   To use Dewpoint Temperature data provided by the input file, enter 2.'
-              '\n   To use RH Max and Min data provided by the input file, enter 3.'
-              '\n   To use RH Avg data provided by the input file, enter 4.'
-              '\n   To use Dewpoint temperature data that was filled in from TMin - Ko, enter 5.'
-              '\n   To skip this selected interval, enter 6.')
+        echo('\nPlease select which variable you want to use for this interval:'
+             '\n   To use Ea data provided by the input file, enter 1.'
+             '\n   To use Dewpoint Temperature data provided by the input file, enter 2.'
+             '\n   To use RH Max and Min data provided by the input file, enter 3.'
+             '\n   To use RH Avg data provided by the input file, enter 4.'
+             '\n   To use Dewpoint temperature data that was filled in from TMin - Ko, enter 5.'
+             '\n   To skip this selected interval, enter 6.')
 
-        choice = int(input("Enter your selection: "))
+        choice = prompt("Enter your selection", type=int, default=default_response)
         loop = 1
 
         while loop:
             if 1 <= choice <= 6:
                 if choice == 1 and ea_col == -1:
-                    print('Ea was not provided by the dataset, please select a provided option.')
-                    choice = int(input('Specify which variable you would like to use: '))
+                    echo('Ea was not provided by the dataset, please select a provided option.')
+                    choice = prompt("Enter your selection", type=int, default=default_response)
                 elif choice == 2 and tdew_col == -1:
-                    print('TDew was not provided by the dataset, please select a provided option.')
-                    choice = int(input('Specify which variable you would like to use: '))
+                    echo('TDew was not provided by the dataset, please select a provided option.')
+                    choice = prompt("Enter your selection", type=int, default=default_response)
                 elif choice == 3 and (rhmax_col == -1 or rhmin_col == -1):
-                    print('RH Max and Min were not provided by the dataset, please select a provided option.')
-                    choice = int(input('Specify which variable you would like to use: '))
+                    echo('RH Max and Min were not provided by the dataset, please select a provided option.')
+                    choice = prompt("Enter your selection", type=int, default=default_response)
                 elif choice == 4 and rhavg_col == -1:
-                    print('RH Avg was not provided by the dataset, please select a provided option.')
-                    choice = int(input('Specify which variable you would like to use: '))
+                    echo('RH Avg was not provided by the dataset, please select a provided option.')
+                    choice = prompt("Enter your selection", type=int, default=default_response)
                 else:
                     # Ko Tdew and skipping always a possible option
                     loop = 0
             else:
-                print('Please enter a valid option.')
-                choice = int(input('Specify which variable you would like to use: '))
+                echo('Please enter a valid option.')
+                choice = prompt("Enter your selection", type=int, default=default_response)
 
         humidity_log.write('Selected interval started at %s and ended at %s. \n' % (int_start, int_end))
 
         if choice == 1:
             # User wants provided Ea
             edited_compiled_ea[int_start:int_end] = ea[int_start:int_end]
-            print('\n The selected interval was overwritten by provided vapor pressure.')
+            echo('\n The selected interval was overwritten by provided vapor pressure.')
             humidity_log.write('Variable used was provided vapor pressure. \n')
 
         elif choice == 2:
@@ -969,7 +1089,7 @@ def compiled_humidity_adjustment(station, log_path, folder_path, dt_array, tmax,
             s_tdew = tdew[int_start:int_end]  # Selected interval of tdew
             calc_ea = np.array(0.6108 * np.exp((17.27 * s_tdew) / (s_tdew + 237.3)))  # EQ 8, units kPa
             edited_compiled_ea[int_start:int_end] = calc_ea
-            print('\n The selected interval was overwritten by provided dewpoint temperature.')
+            echo('\n The selected interval was overwritten by provided dewpoint temperature.')
             humidity_log.write('Variable used was provided dewpoint temperature. \n')
 
         elif choice == 3:
@@ -983,7 +1103,7 @@ def compiled_humidity_adjustment(station, log_path, folder_path, dt_array, tmax,
             eo_tmin = np.array(0.6108 * np.exp((17.27 * s_tmin) / (s_tmin + 237.3)))  # units kPa, EQ 7
             calc_ea = np.array(((eo_tmin * (s_rhmax / 100)) + (eo_tmax * (s_rhmin / 100))) / 2)  # EQ 11
             edited_compiled_ea[int_start:int_end] = calc_ea
-            print('\n The selected interval was overwritten by RH Maximum and Minimum.')
+            echo('\n The selected interval was overwritten by RH Maximum and Minimum.')
             humidity_log.write('Variable used was provided RH Maximum and Minimum. \n')
 
         elif choice == 4:
@@ -994,7 +1114,7 @@ def compiled_humidity_adjustment(station, log_path, folder_path, dt_array, tmax,
             eo_tavg = np.array(0.6108 * np.exp((17.27 * s_tavg) / (s_tavg + 237.3)))  # units kPa, EQ 7
             calc_ea = np.array(eo_tavg * (s_rhavg / 100))  # EQ 14
             edited_compiled_ea[int_start:int_end] = calc_ea
-            print('\n The selected interval was overwritten by RH Average.')
+            echo('\n The selected interval was overwritten by RH Average.')
             humidity_log.write('Variable used was provided RH Average. \n')
 
         elif choice == 5:
@@ -1002,11 +1122,11 @@ def compiled_humidity_adjustment(station, log_path, folder_path, dt_array, tmax,
             s_tdew_ko = tdew_ko[int_start:int_end]  # Selected interval of tdew
             calc_ea = np.array(0.6108 * np.exp((17.27 * s_tdew_ko) / (s_tdew_ko + 237.3)))  # EQ 8, units kPa
             edited_compiled_ea[int_start:int_end] = calc_ea
-            print('\n The selected interval was overwritten by dewpoint temperature filled in with the k0 curve.')
+            echo('\n The selected interval was overwritten by dewpoint temperature filled in with the k0 curve.')
             humidity_log.write('Variable used was provided dewpoint temperature filled in by the Ko curve. \n')
 
         elif choice == 6:
-            print('\n The selected interval was not modified.')
+            echo('\n The selected interval was not modified.')
             humidity_log.write('The selected interval was skipped. \n')
 
         else:
@@ -1022,20 +1142,20 @@ def compiled_humidity_adjustment(station, log_path, folder_path, dt_array, tmax,
 
         ####################
         # Determine if user wants to keep correcting
-        print('\nAre you done adjusting humidity?'
-              '\n   Enter 1 for yes.'
-              '\n   Enter 2 for another iteration.'
-              '\n   Enter 3 to start over.'
-              '\n   Enter 4 to discard all changes.')
+        echo('\nAre you done adjusting humidity?'
+             '\n   Enter 1 for yes.'
+             '\n   Enter 2 for another iteration.'
+             '\n   Enter 3 to start over.'
+             '\n   Enter 4 to discard all changes.')
 
-        choice = int(input("Enter your selection: "))
+        choice = prompt("Enter your selection", type=int, default=1)
         loop = 1
         while loop:
             if 1 <= choice <= 4:
                 loop = 0
             else:
-                print('Please enter a valid option.')
-                choice = int(input('Enter your selection: '))
+                echo('Please enter a valid option.')
+                choice = prompt("Enter your selection", type=int, default=1)
 
         if choice == 1:
             adjustment_loop = 0
@@ -1056,4 +1176,4 @@ def compiled_humidity_adjustment(station, log_path, folder_path, dt_array, tmax,
 
 # This is never run by itself
 if __name__ == "__main__":
-    print("\nThis module is called as a part of the QAQC script, it does nothing by itself.")
+    echo("\nThis module is called as a part of the QAQC script, it does nothing by itself.")

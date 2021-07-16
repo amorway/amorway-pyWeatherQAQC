@@ -1,5 +1,6 @@
 import logging as log
 import numpy as np
+from click import echo, progressbar
 from refet import Daily
 from refet.calcs import _ra_daily, _rso_daily
 
@@ -266,8 +267,8 @@ def calc_org_and_opt_rs_tr(mc_iterations, log_path, month, delta_t, mm_delta_t, 
             opt_rs_tr : 1D numpy array of thornton-running solar radiation with optimized B coefficient values
             mm_opt_rs_tr : monthly averaged opt_rs_tr (12 values total) values across all of record
     """
-    print("\nSystem: Now performing a Monte Carlo simulation to optimize Thornton Running solar radiation parameters.")
-    print("\nSystem: %s iterations are being run, this may take some time." % mc_iterations)
+    echo("System: Now performing a Monte Carlo simulation to optimize Thornton Running solar radiation parameters.")
+    echo("System: %s iterations are being run, this may take some time." % mc_iterations)
 
     b_zero = np.array(0.031 + (0.031 * 0.5) * np.random.uniform(low=-1, high=1, size=mc_iterations))
     b_one = np.array(0.201 + (0.201 * 0.5) * np.random.uniform(low=-1, high=1, size=mc_iterations))
@@ -278,25 +279,21 @@ def calc_org_and_opt_rs_tr(mc_iterations, log_path, month, delta_t, mm_delta_t, 
     # Calculate rs_tr using original, unoptimized B coefficients
     (orig_rs_tr, mm_orig_rs_tr) = calc_rs_tr(month, rso, delta_t, mm_delta_t, 0.031, 0.201, -0.185)
 
-    for i in range(mc_iterations):
-        # Run all randomized b coefficients through thornton running calculation
-        (mc_rs_tr, mm_mc_rs_tr) = calc_rs_tr(month, rso, delta_t, mm_delta_t, b_zero[i], b_one[i], b_two[i])
-
-        mc_rmse[i] = np.sqrt(np.nanmean((mc_rs_tr - rs) ** 2))  # Calculate RMSE to track how good those parameters were
-
-        if (i % 100) == 0:  # Update user so they don't think script is frozen.
-            print('\nSystem: processing Thornton-Running iteration: {}'.format(i))
-        else:
-            pass
+    iterations = range(mc_iterations)
+    with progressbar(iterations) as bar:
+        for i in bar:
+            # Run all randomized b coefficients through thornton running calculation
+            (mc_rs_tr, mm_mc_rs_tr) = calc_rs_tr(month, rso, delta_t, mm_delta_t, b_zero[i], b_one[i], b_two[i])
+            mc_rmse[i] = np.sqrt(np.nanmean((mc_rs_tr - rs) ** 2))  # Calc RMSE to evaluate randomized parameters
 
     # Now that we've iterated through all variations, find the best one
     min_rmse_index = np.nanargmin(mc_rmse)
     # Calculate RMSE of original rs_tr B coefficients
     orig_rmse = np.sqrt(np.nanmean((orig_rs_tr - rs) ** 2))
 
-    print('\nSystem: original coefficients for TR Solar Radiation produced an RMSE of: {0:.4f}'.format(orig_rmse))
-    print('System: optimized coefficients for TR Solar Radiation produced an RMSE of: {0:.4f}'.
-          format(mc_rmse[min_rmse_index]))
+    echo('System: original coefficients for TR Solar Radiation produced an RMSE of: {0:.4f}'.format(orig_rmse))
+    echo('System: optimized coefficients for TR Solar Radiation produced an RMSE of: {0:.4f}'.
+         format(mc_rmse[min_rmse_index]))
 
     # Calculate the optimized rs_tr using the B coefficients that caused the lowest rmse
     (opt_rs_tr, mm_opt_rs_tr) = calc_rs_tr(month, rso, delta_t, mm_delta_t, b_zero[min_rmse_index],
@@ -402,4 +399,4 @@ def compile_ea(tmax, tmin, tavg, ea, tdew, tdew_col, rhmax, rhmax_col, rhmin, rh
 
 # This is never run by itself
 if __name__ == "__main__":
-    print("\nThis module is called as a part of the QAQC script, it does nothing by itself.")
+    echo("\nThis module is called as a part of the QAQC script, it does nothing by itself.")

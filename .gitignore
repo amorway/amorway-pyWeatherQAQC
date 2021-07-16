@@ -4,5 +4,9 @@ __pycache__/
 venv/
 *.pyc
 
+images/
+cimis_stations/
+cimis_metadata_and_notes.xlsx
+wind_testing/
+correction_metadata.xlsx
 
-*.pyc

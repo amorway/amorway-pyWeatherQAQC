@@ -5,6 +5,7 @@ import numpy as np
 import os
 import pandas as pd
 import pathlib as pl
+from click import echo
 
 
 def validate_file(file_path, expected_extensions):
@@ -71,7 +72,6 @@ def read_config(config_file_path):
 
     # OPTIONS Section
     config_dict['corr_flag'] = config_reader['OPTIONS'].getboolean('correction_option')  # Option to correct the data
-    config_dict['auto_flag'] = config_reader['OPTIONS'].getboolean('automatic_option')  # auto first iteration of QAQC
     config_dict['fill_flag'] = config_reader['OPTIONS'].getboolean('fill_option')  # Option to fill in missing data
     config_dict['plot_flag'] = config_reader['OPTIONS'].getboolean('plot_option')  # Option to generate bokeh plots
 
@@ -97,6 +97,7 @@ def read_config(config_file_path):
     config_dict['temp_f_flag'] = config_reader['DATA'].getboolean('temp_f_flag')
     config_dict['temp_k_flag'] = config_reader['DATA'].getboolean('temp_k_flag')
     config_dict['uz_mph_flag'] = config_reader['DATA'].getboolean('uz_mph_flag')
+    config_dict['uz_kmh_flag'] = config_reader['DATA'].getboolean('uz_kmh_flag')
     config_dict['uz_wind_run_km_flag'] = config_reader['DATA'].getboolean('uz_wind_run_kilometers_flag')
     config_dict['uz_wind_run_mi_flag'] = config_reader['DATA'].getboolean('uz_wind_run_miles_flag')
     config_dict['pp_inch_flag'] = config_reader['DATA'].getboolean('pp_inch_flag')
@@ -109,6 +110,17 @@ def read_config(config_file_path):
 
     # Data Section - Other
     config_dict['date_format'] = config_reader['DATA'].getint('date_format')
+
+    # Data Section - Orchard Adjustment Code
+    config_dict['orchard_adjustment_flag'] = config_reader['DATA'].getboolean('orchard_adjustment_flag')
+    config_dict['orchard_average_height_m'] = config_reader['DATA'].getfloat('orchard_average_height_m')
+    config_dict['orchard_horizontal_fetch_m'] = config_reader['DATA'].getfloat('orchard_horizontal_fetch_m')
+    config_dict['region_average_height_m'] = config_reader['DATA'].getfloat('region_average_height_m')
+    config_dict['region_blending_height_m'] = config_reader['DATA'].getfloat('region_blending_height_m')
+    config_dict['weather_surface_height_m'] = config_reader['DATA'].getfloat('weather_surface_height_m')
+    config_dict['station_blending_height_m'] = config_reader['DATA'].getfloat('station_blending_height_m')
+    config_dict['desired_measurement_height_m'] = config_reader['DATA'].getfloat('desired_measurement_height_m')
+    config_dict['provided_anemom_height_m'] = config_reader['DATA'].getfloat('provided_anemom_height_m')
 
     # Check to see that all expected variables are provided, ConfigParser defaults to None if it can't find something.
     if None in config_dict.values():
@@ -187,16 +199,29 @@ def convert_units(config_dict, original_data, var_type):
             raise ValueError('Incorrect parameters: vapor pressure unit flags in config are not set up correctly.')
 
     elif var_type == 'wind_speed':
-        if config_dict['uz_mph_flag'] == 1 and config_dict['uz_wind_run_km_flag'] == 0 \
+        if config_dict['uz_mph_flag'] == 1 \
+                and config_dict['uz_kmh_flag'] == 0 \
+                and config_dict['uz_wind_run_km_flag'] == 0 \
                 and config_dict['uz_wind_run_mi_flag'] == 0:  # wind speed in miles per hour
             converted_data = np.array(original_data * 0.44704)  # Convert mph to m/s
-        elif config_dict['uz_mph_flag'] == 0 and config_dict['uz_wind_run_km_flag'] == 1 \
+        elif config_dict['uz_mph_flag'] == 0 \
+                and config_dict['uz_kmh_flag'] == 1 \
+                and config_dict['uz_wind_run_km_flag'] == 0 \
+                and config_dict['uz_wind_run_mi_flag'] == 0:  # Wind speed in kilometers per hour
+            converted_data = np.array(original_data / 3.6)
+        elif config_dict['uz_mph_flag'] == 0 \
+                and config_dict['uz_kmh_flag'] == 0 \
+                and config_dict['uz_wind_run_km_flag'] == 1 \
                 and config_dict['uz_wind_run_mi_flag'] == 0:  # Wind run in km/day
             converted_data = np.array((original_data * 1000) / 86400)  # Convert km to m and day to seconds
-        elif config_dict['uz_mph_flag'] == 0 and config_dict['uz_wind_run_km_flag'] == 0 \
+        elif config_dict['uz_mph_flag'] == 0 \
+                and config_dict['uz_kmh_flag'] == 0 \
+                and config_dict['uz_wind_run_km_flag'] == 0 \
                 and config_dict['uz_wind_run_mi_flag'] == 1:  # Wind run in mi/day
             converted_data = np.array(original_data * 0.0186267)  # todo source this equation of mi/day to m/s
-        elif config_dict['uz_mph_flag'] == 0 and config_dict['uz_wind_run_km_flag'] == 0 \
+        elif config_dict['uz_mph_flag'] == 0 \
+                and config_dict['uz_kmh_flag'] == 0 \
+                and config_dict['uz_wind_run_km_flag'] == 0 \
                 and config_dict['uz_wind_run_mi_flag'] == 0:  # wind speed in m/s
             pass
         else:
@@ -264,7 +289,7 @@ def daily_realistic_limits(original_data, log_path, var_type):
         limited_data[original_data <= -50] = clip_value  # -50 C is -58 F
         limited_data[original_data >= 60] = clip_value  # 60 C is 140 F
     elif var_type == 'wind_speed':
-        limited_data[original_data < 0.1] = clip_value  # Negative wind speed is impossible
+        limited_data[original_data <= 0.5] = clip_value  # limit recommended by FAO 56, page 63, bottom of page
         limited_data[original_data >= 35] = clip_value  # 35 m/s is a cat 1 hurricane
     elif var_type == 'precipitation':
         limited_data[original_data < 0] = clip_value  # Negative precipitation is impossible
@@ -408,6 +433,57 @@ def process_variable(config_dict, raw_data, var_name):
     return processed_var, var_col
 
 
+def orchard_adjustment(config_dict, wind):
+    """
+        Uses EQ 13+14 of "TRANSLATING WIND MEASUREMENTS FROM WEATHER STATIONS TO AGRICULTURAL CROPS" by Allen and Wright
+        (1997) to adjust station wind observations that occur within an orchard to approximately reference conditions
+
+        This function is provisional and currently under review
+
+        Theory:
+            d - zero plane displacement height
+            zom - surface roughness length
+
+        Args:
+            config_dict : dictionary of all config file values
+            wind : 1D numpy array of wind values at orchard conditions
+
+        Returns:
+            adjusted_wind : wind observations that have been adjusted to account for orchard conditions
+    """
+
+    # The below two parameters are sourced based on the average height of the orchard around the station
+    zom_orchard = config_dict['orchard_average_height_m'] * 0.12
+    d_orchard = config_dict['orchard_average_height_m'] * 0.67
+
+    # The below two parameters are sourced based on the average height  of native ground vegetation in the region
+    zom_region = config_dict['region_average_height_m'] * 0.12
+    d_region = config_dict['region_average_height_m'] * 0.67
+
+    zom_weather_surface = config_dict['weather_surface_height_m'] * 0.12
+    d_weather_surface = config_dict['weather_surface_height_m'] * 0.67
+
+    # Height of internal boundary layer above orchard
+    # TODO: if the height of the anemometer was ABOVE the value of z_ibv_v_m, use EQ 18-20, to be added
+    z_ibv_v_m = d_orchard + 0.33 * zom_orchard ** 0.125 * config_dict['orchard_horizontal_fetch_m'] ** 0.875  # EQ 14
+
+    adj_fact_numer = np.log((config_dict['desired_measurement_height_m'] - d_weather_surface) / zom_weather_surface) * \
+        np.log((config_dict['station_blending_height_m'] - d_region) / zom_region) * \
+        np.log((z_ibv_v_m - d_orchard) / zom_orchard)
+
+    adj_fact_denom = np.log((config_dict['station_blending_height_m'] - d_weather_surface) / zom_weather_surface) * \
+        np.log((z_ibv_v_m - d_region) / zom_region) * \
+        np.log((config_dict['provided_anemom_height_m'] - d_orchard) / zom_orchard)
+
+    # testing against rick's palisade adjustments, he got an adjustment factor of 1.34591 and I got 1.34864
+    adjusted_wind = wind * (adj_fact_numer / adj_fact_denom)  # EQ 13
+
+    # This output adjusted_wind is now measured at whatever height was provided for 'desired_measurement_height_m'
+    # in the config file, so change the anemometer height to the correct value
+    config_dict['anemometer_height'] = config_dict['desired_measurement_height_m']
+    return adjusted_wind
+
+
 def obtain_data(config_file_path, metadata_file_path=None):
     """
         Uses read_config() to acquire a full dictionary of the config file and then uses the values contained within it
@@ -436,16 +512,16 @@ def obtain_data(config_file_path, metadata_file_path=None):
     # Open config file
     validate_file(config_file_path, ['ini'])
     config_dict = read_config(config_file_path)
-    print('\nSuccessfully opened config file at %s' % config_file_path)
+    echo('Successfully opened config file at %s' % config_file_path)
 
     # Open metadata file
     # If a metadata file is provided we will open it and overwrite values in config_dict with its values
     if metadata_file_path is not None:
 
-        validate_file(metadata_file_path, 'xlsx')  # Validate file to make sure it exists and is the right type
+        validate_file(metadata_file_path, ['xls', 'xlsx'])  # Validate file to make sure it exists and is the right type
         metadata_df = pd.read_excel(metadata_file_path, sheet_name=0, index_col=0, engine='openpyxl',
                                     keep_default_na=True, na_filter=True, verbose=True)
-        print('\nSuccessfully opened metadata file at %s' % metadata_file_path)
+        echo('Successfully opened metadata file at %s' % metadata_file_path)
 
         current_row = metadata_df.run_count.ne(2).idxmax() - 1
         metadata_series = metadata_df.iloc[current_row]
@@ -509,24 +585,18 @@ def obtain_data(config_file_path, metadata_file_path=None):
                                na_values=config_dict['missing_data_value'], keep_default_na=True,
                                na_filter=True, verbose=True, skip_blank_lines=True)
 
-    elif station_extension == '.xlsx':
-        raw_data = pd.read_excel(config_dict['data_file_path'], sheet_name=0, header=config_dict['lines_of_header'],
-                                 index_col=None, engine='openpyxl', skipfooter=config_dict['lines_of_footer'],
-                                 na_values=config_dict['missing_data_value'], keep_default_na=True,
-                                 na_filter=True, verbose=True)
-
-    elif station_extension == '.xls':
+    elif station_extension in ['.xls', '.xlsx']:
         raw_data = pd.read_excel(config_dict['data_file_path'], sheet_name=0, header=config_dict['lines_of_header'],
                                  index_col=None, engine='xlrd', skipfooter=config_dict['lines_of_footer'],
                                  na_values=config_dict['missing_data_value'], keep_default_na=True,
-                                 na_filter=True, verbose=True)
+                                 na_filter=True, verbose=True, skip_blank_lines=True)
 
     else:
         # This script is only handles csv and excel files. Validate_file() already catches this case
         raise IOError('\n\nProvided file was of type \'{}\' but script was expecting type \'{}\'.'
                       .format(station_extension, ['csv', 'xls', 'xlsx']))
 
-    print('\nSuccessfully opened data file at %s' % config_dict['data_file_path'])
+    echo('Successfully opened data file at %s' % config_dict['data_file_path'])
 
     # Handle any for network-specific oddities that may have slipped through
     raw_data = raw_data.replace(to_replace='NO RECORD   ', value=np.nan)  # catch for whitespaces on agriment
@@ -548,7 +618,7 @@ def obtain_data(config_file_path, metadata_file_path=None):
     logger.write('The raw data for %s has been successfully read in at %s. \n \n' %
                  (config_dict['station_name'], dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     logger.close()
-    print('\nSuccessfully created log file at %s.' % config_dict['log_file_path'])
+    echo('Successfully created log file at %s.' % config_dict['log_file_path'])
 
     # Date handling, figures out the date format and extracts from string if needed
     if config_dict['date_format'] == 1:
@@ -608,25 +678,13 @@ def obtain_data(config_file_path, metadata_file_path=None):
     (data_ws, ws_col) = process_variable(config_dict, raw_data, 'wind_speed')
     (data_precip, precip_col) = process_variable(config_dict, raw_data, 'precipitation')
 
-    # HPRCC data reports '0' for missing observations as well as a text column, but this script doesn't interpret text
-    # columns, so instead we see if both tmax and tmin have the same value (0, or -17.7778 depending on units) and if so
-    # mark that row as missing
-    # realistically tmax should never equal tmin, so this is an okay check to have in general
-    for i in range(len(data_tmax)):
-        if data_tmax[i] == data_tmin[i]:
-            data_tmax[i] = np.nan
-            data_tmin[i] = np.nan
-            data_tavg[i] = np.nan
-            data_tdew[i] = np.nan
-            data_ea[i] = np.nan
-            data_rhmax[i] = np.nan
-            data_rhmin[i] = np.nan
-            data_rhavg[i] = np.nan
-            data_rs[i] = np.nan
-            data_ws[i] = np.nan
-            data_precip[i] = np.nan
-        else:
-            pass
+    #########################
+    # Orchard Adjustment of Wind
+    if config_dict['orchard_adjustment_flag'] == 1:
+        echo('Translating orchard wind conditions to reference wind conditions')
+        data_ws = orchard_adjustment(config_dict, data_ws)
+    else:
+        pass
 
     #########################
     # Dataframe Construction
@@ -649,7 +707,7 @@ def obtain_data(config_file_path, metadata_file_path=None):
                  reindexing_additions.size)
     logger.close()
 
-    print('\nSystem: The input data file had %s missing dates in its time record.' % reindexing_additions.size)
+    echo('System: The input data file had %s missing dates in its time record.' % reindexing_additions.size)
 
     # Create dataframe of data
     data_df = pd.DataFrame({'year': data_year, 'month': data_month,
@@ -680,4 +738,4 @@ def obtain_data(config_file_path, metadata_file_path=None):
 
 # This is never run by itself
 if __name__ == "__main__":
-    print("\nThis module is called as a part of the QAQC script, it does nothing by itself.")
+    echo("This module is called as a part of the QAQC script, it does nothing by itself.")

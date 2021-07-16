@@ -5,6 +5,7 @@ from math import ceil
 import numpy as np
 import os
 import pandas as pd
+from click import echo, prompt
 from qaqc_modules import data_functions, input_functions, plotting_functions, qaqc_functions
 from refet.calcs import _wind_height_adjust
 
@@ -35,7 +36,6 @@ class WeatherQAQC:
         self.folder_path = self.config_dict['folder_path']
 
         self.script_mode = self.config_dict['corr_flag']
-        self.auto_mode = self.config_dict['auto_flag']
         self.fill_mode = self.config_dict['fill_flag']
         self.generate_bokeh = self.config_dict['plot_flag']
 
@@ -44,7 +44,7 @@ class WeatherQAQC:
         else:
             self.mc_iterations = 50  # if we're not correcting data then only do a few iterations to save time
 
-        print("\nSystem: Raw data successfully extracted from station file.")
+        echo("System: Raw data successfully extracted from station file.")
 
         # Extract individual variables from data frame back into to numpy arrays.
         self.data_year = np.array(self.data_df.year)
@@ -68,7 +68,7 @@ class WeatherQAQC:
         """
             Calculate secondary variables from initial ones
         """
-        print("\nSystem: Now calculating secondary variables based on data provided.")
+        echo("System: Now calculating secondary variables based on data provided.")
         self.data_length = self.data_year.shape[0]
         self.station_pressure = 101.3 * (((293 - (0.0065 * self.station_elev)) / 293) ** 5.26)  # units kPa, EQ 3 ASCE
 
@@ -174,9 +174,9 @@ class WeatherQAQC:
         # If user opts to not correct data (sets script_mode = 0),
         # then skips this section and just generates composite plot
         if self.script_mode == 1:
-            print("\nSystem: Now beginning correction on data.")
+            echo("System: Now beginning correction on data.")
         else:
-            print("\nSystem: Skipping data correction and plotting raw data.")
+            echo("System: Skipping data correction and plotting raw data.")
 
         # create a flag to check if composite ea has been adjusted or not before correcting solar radiation
         self.humidity_adjusted = False
@@ -196,122 +196,132 @@ class WeatherQAQC:
         self.fill_ws = np.zeros(self.data_length)
         self.fill_rso = np.zeros(self.data_length)
 
+        # Create list of default responses based on what variables are provided
+        self.default_response_list = [1]
+        if self.column_df.tdew != -1:
+            self.default_response_list.append(2)
+        if self.column_df.rhmax != -1 and self.column_df.rhmax != -1:
+            self.default_response_list.append(7)
+        self.default_response_list.extend([3, 9, 5, 0])
+
         # Begin loop for correcting variables
         while self.script_mode == 1:
+            default_response = self.default_response_list.pop(0)
             reset_output()  # clears bokeh output, prevents ballooning file sizes
-            print('\nPlease select which of the following variables you want to correct'
-                  '\n   Enter 1 for TMax and TMin.'
-                  '\n   Enter 2 for TMin and TDew, if TDew was provided.'
-                  '\n   Enter 3 for Windspeed.'
-                  '\n   Enter 4 for Precipitation.'
-                  '\n   Enter 5 for Solar Radiation (Rs).'
-                  '\n   Enter 6 for Vapor Pressure (Ea), if it was provided.'
-                  '\n   Enter 7 for RH Maximum and Minimum, if they were provided.'
-                  '\n   Enter 8 for RH Average, if it was provided.'
-                  '\n   Enter 9 to adjust how compiled humidity is sourced.'
-                  '\n   Enter 0 to stop applying corrections.'
-                  )
+            echo('\nPlease select which of the following variables you want to correct:'
+                 '\n   Enter 1 for TMax and TMin.'
+                 '\n   Enter 2 for TMin and TDew, if TDew was provided.'
+                 '\n   Enter 3 for Windspeed.'
+                 '\n   Enter 4 for Precipitation.'
+                 '\n   Enter 5 for Solar Radiation (Rs).'
+                 '\n   Enter 6 for Vapor Pressure (Ea), if it was provided.'
+                 '\n   Enter 7 for RH Maximum and Minimum, if they were provided.'
+                 '\n   Enter 8 for RH Average, if it was provided.'
+                 '\n   Enter 9 to adjust how compiled humidity is sourced.'
+                 '\n   Enter 0 to stop applying corrections.'
+                 )
 
-            user = int(input("\nEnter your selection: "))
+            user_choice = prompt('Enter your selection', type=int, default=default_response)
+            echo('\n')
+
             choice_loop = 1
             while choice_loop:
-                if 0 <= user <= 9:
+                if 0 <= user_choice <= 9:
                     # The following if statements check if user tries to correct a variable that was not provided
-                    # or make sure correction is being done in the right manner
-                    if user == 2 and self.column_df.tdew == -1:
-                        print('\nDewpoint temperature was not provided by the file, please choose a different option.')
-                        user = int(input('Specify which variable you would like to correct: '))
+                    if user_choice == 2 and self.column_df.tdew == -1:
+                        echo('Dewpoint temperature was not provided by the file, please choose a different option.')
+                        user_choice = prompt('Enter your selection', type=int)
 
-                    elif user == 5 and not self.humidity_adjusted:
-                        print('\n\nBefore correcting solar radiation, did you want to adjust compiled humidity?.')
-                        print('Doing so may allow you to get the best possible humidity record for Rs correction.')
-                        print('\nEnter 1 to adjust compiled humidity or 0 to skip.')
+                    elif user_choice == 6 and self.column_df.ea == -1:
+                        echo('Vapor Pressure was not provided by the file, please choose a different option.')
+                        user_choice = prompt('Enter your selection', type=int)
 
+                    elif user_choice == 7 and (self.column_df.rhmax == -1 or self.column_df.rhmin == -1):
+                        echo('RHMax and RHMin were not provided by the file, please choose a different option.')
+                        user_choice = prompt('Enter your selection', type=int)
+
+                    elif user_choice == 8 and self.column_df.rhavg == -1:
+                        echo('RHAvg was not provided by the file, please choose a different option.')
+                        user_choice = prompt('Enter your selection', type=int)
+
+                    # this elif is to check if user is considering adjusting humidity record before Rs corrections
+                    elif user_choice == 5 and not self.humidity_adjusted:
+                        echo('Before correcting solar radiation, did you want to adjust compiled humidity?'
+                             '\nDoing so may allow you to get the best possible humidity record for Rs correction.'
+                             '\nEnter 1 to adjust compiled humidity or 0 to skip.'
+                             )
                         humid_loop = 1
                         while humid_loop:
-                            humid_choice = int(input('Enter your selection: '))
+                            humid_choice = prompt('Enter your selection', type=int, default=1)
                             if humid_choice == 0:
                                 # user is choosing to skip humidity adjustment so nothing needs to be done.
                                 humid_loop = 0
                             elif humid_choice == 1:
                                 # change original choice to the adjust humidity option
-                                user = 9
+                                user_choice = 9
                                 humid_loop = 0
                             else:
                                 # non valid choice entered
-                                print('\nPlease enter a valid option.')
-
+                                echo('\nPlease enter a valid option.')
                         choice_loop = 0
-
-                    elif user == 6 and self.column_df.ea == -1:
-                        print('\nVapor Pressure was not provided by the file, please choose a different option.')
-                        user = int(input('Specify which variable you would like to correct: '))
-
-                    elif user == 7 and (self.column_df.rhmax == -1 or self.column_df.rhmin == -1):
-                        print('\nRHMax and RHMin were not provided by the file, please choose a different option.')
-                        user = int(input('Specify which variable you would like to correct: '))
-
-                    elif user == 8 and self.column_df.rhavg == -1:
-                        print('\nRHAvg was not provided by the file, please choose a different option.')
-                        user = int(input('Specify which variable you would like to correct: '))
                     else:
                         choice_loop = 0
                 else:
-                    print('\nPlease enter a valid option.')
-                    user = int(input('Specify which variable you would like to correct: '))
+                    echo('Please enter a valid option.')
+                    user_choice = prompt('Enter your selection', type=int)
 
             ##########
             # Correcting individual variables based on user choice
             # Correcting Max/Min Temperature data
-            if user == 1:
+            if user_choice == 1:
                 (self.data_tmax, self.data_tmin) = qaqc_functions.\
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_tmax, self.data_tmin, self.dt_array,
-                               self.data_month, self.data_year, 1, self.auto_mode)
+                               self.data_month, self.data_year, 1)
             # Correcting Min/Dew Temperature data
-            elif user == 2:
+            elif user_choice == 2:
                 (self.data_tmin, self.data_tdew) = qaqc_functions.\
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_tmin, self.data_tdew, self.dt_array,
-                               self.data_month, self.data_year, 2, self.auto_mode)
+                               self.data_month, self.data_year, 2)
             # Correcting Windspeed
-            elif user == 3:
+            elif user_choice == 3:
                 (self.data_ws, self.data_null) = qaqc_functions.\
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_ws, self.data_null, self.dt_array,
-                               self.data_month, self.data_year, 3, self.auto_mode)
+                               self.data_month, self.data_year, 3)
             # Correcting Precipitation
-            elif user == 4:
+            elif user_choice == 4:
                 (self.data_precip, self.data_null) = qaqc_functions.\
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_precip, self.data_null, self.dt_array,
-                               self.data_month, self.data_year, 4, self.auto_mode)
+                               self.data_month, self.data_year, 4)
             # Correcting Solar radiation
-            elif user == 5:
+            elif user_choice == 5:
                 (self.data_rs, self.data_null) = qaqc_functions.\
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_rs, self.rso, self.dt_array,
-                               self.data_month, self.data_year, 5, self.auto_mode)
+                               self.data_month, self.data_year, 5)
             # Correcting Vapor Pressure
-            elif user == 6:
+            elif user_choice == 6:
                 (self.data_ea, self.data_null) = qaqc_functions.\
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_ea, self.data_null, self.dt_array,
-                               self.data_month, self.data_year, 7, self.auto_mode)
+                               self.data_month, self.data_year, 7)
             # Correcting Relative Humidity Max and Min
-            elif user == 7:
+            elif user_choice == 7:
                 (self.data_rhmax, self.data_rhmin) = qaqc_functions.\
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_rhmax, self.data_rhmin, self.dt_array,
-                               self.data_month, self.data_year, 8, self.auto_mode)
+                               self.data_month, self.data_year, 8)
             # Correcting Relative Humidity Average
-            elif user == 8:
+            elif user_choice == 8:
                 (self.data_rhavg, self.data_null) = qaqc_functions.\
                     correction(self.station_name, self.log_file, self.folder_path,
                                self.data_rhavg, self.data_null, self.dt_array,
-                               self.data_month, self.data_year, 9, self.auto_mode)
+                               self.data_month, self.data_year, 9)
             # Adjusting compiled_ea
-            elif user == 9:
+            elif user_choice == 9:
                 self.compiled_ea = qaqc_functions.\
                     compiled_humidity_adjustment(self.station_name, self.log_file, self.folder_path, self.dt_array,
                                                  self.data_tmax, self.data_tmin, self.data_tavg, self.compiled_ea,
@@ -322,15 +332,14 @@ class WeatherQAQC:
 
                 self.humidity_adjusted = True
             else:
-                # todo make this more explicit and handle user input that isnt strictly int without breaking
                 # user quits, exit out of loop
-                print('\nSystem: Now finishing up corrections.')
+                echo('System: Now finishing up corrections.')
                 # Break here because all recalculations were done at the end of the last loop iteration
                 # also we break as opposed to setting script_mode to 0 because it is used later in the program
                 break
 
-            if 1 <= user <= 2 or 6 <= user <= 8:
-                if user == 1:  # User has corrected temperature, so fill all missing values with a normal distribution
+            if 1 <= user_choice <= 2 or 6 <= user_choice <= 8:
+                if user_choice == 1:  # User has corrected temp, so fill all missing values with a normal distribution
 
                     # Reset 'complete' vars as the underlying var has been changed.
                     self.complete_tmax = np.array(self.data_tmax)
@@ -425,7 +434,7 @@ class WeatherQAQC:
                 # so this reset is acceptable
                 self.data_tdew_ko = np.array(self.data_tdew)
 
-                if user == 2 or 6 <= user <= 8:
+                if user_choice == 2 or 6 <= user_choice <= 8:
 
                     # Reset 'complete' version as underlying variable may have changed
                     self.complete_tdew = np.array(self.data_tdew)
@@ -497,7 +506,7 @@ class WeatherQAQC:
                     # tracking variables
                     self.fill_ea = np.zeros(self.data_length)
 
-            elif user == 9:  # User has adjusted how the compiled humidity is sourced, recreate complete_ea
+            elif user_choice == 9:  # User has adjusted how the compiled humidity is sourced, recreate complete_ea
                 self.complete_ea = np.array(self.compiled_ea)
 
                 for i in range(self.data_length):
@@ -652,7 +661,7 @@ class WeatherQAQC:
         # Creates one large plot featuring all variables as subplots, used to get a concise overview of the full dataset
         # If user opts to not correct data (sets script_mode = 0), then this plots data before correction
         # If user does correct data, then this plots data after correction
-        print("\nSystem: Now creating composite bokeh graph.")
+        echo("System: Now creating composite bokeh graph.")
         if self.generate_bokeh:  # Flag to create graphs or not
             plot_list = []
             x_size = 500
@@ -678,13 +687,13 @@ class WeatherQAQC:
             plot_list.append(plot_tmin_tdew)
 
             # 'Completed' vapor pressure plot
-            plot_comp_ea = plotting_functions.line_plot(x_size, y_size, self.dt_array, self.compiled_ea, self.data_null,
+            plot_comp_ea = plotting_functions.line_plot(x_size, y_size, self.dt_array, self.compiled_ea, None,
                                                         7, 'Composite ', plot_tmax_tmin)
             plot_list.append(plot_comp_ea)
 
             # vapor pressure plot that was just the provided dataset
             if self.column_df.ea != -1:
-                plot_data_ea = plotting_functions.line_plot(x_size, y_size, self.dt_array, self.data_ea, self.data_null,
+                plot_data_ea = plotting_functions.line_plot(x_size, y_size, self.dt_array, self.data_ea, None,
                                                             7, 'Provided ', plot_tmax_tmin)
                 plot_list.append(plot_data_ea)
 
@@ -697,7 +706,7 @@ class WeatherQAQC:
             # rh avg if it was provided in the dataset
             if self.column_df.rhavg != -1:  # RH Avg
                 plot_rhavg = plotting_functions.line_plot(x_size, y_size, self.dt_array, self.data_rhavg,
-                                                          self.data_null, 9, '', plot_tmax_tmin)
+                                                          None, 9, '', plot_tmax_tmin)
                 plot_list.append(plot_rhavg)
 
             # Mean Monthly Temperature Minimum and Dewpoint
@@ -707,7 +716,7 @@ class WeatherQAQC:
 
             # Mean Monthly k0 curve (Tmin-Tdew)
             plot_mm_k_not = plotting_functions.line_plot(x_size, y_size, self.mm_dt_array, self.mm_k_not,
-                                                         self.data_null, 10, '', plot_mm_tmin_tdew)
+                                                         None, 10, '', plot_mm_tmin_tdew)
             plot_list.append(plot_mm_k_not)
 
             # Solar radiation and clear sky solar radiation
@@ -716,12 +725,12 @@ class WeatherQAQC:
             plot_list.append(plot_rs_rso)
 
             # Windspeed
-            plot_ws = plotting_functions.line_plot(x_size, y_size, self.dt_array, self.data_ws, self.data_null,
+            plot_ws = plotting_functions.line_plot(x_size, y_size, self.dt_array, self.data_ws, None,
                                                    3, '', plot_tmax_tmin)
             plot_list.append(plot_ws)
 
             # Precipitation
-            plot_precip = plotting_functions.line_plot(x_size, y_size, self.dt_array, self.data_precip, self.data_null,
+            plot_precip = plotting_functions.line_plot(x_size, y_size, self.dt_array, self.data_precip, None,
                                                        4, '', plot_tmax_tmin)
             plot_list.append(plot_precip)
 
@@ -752,13 +761,14 @@ class WeatherQAQC:
             fig = gridplot(grid_of_plots, toolbar_location='left')
             save(fig)
 
-            print("\nSystem: Composite bokeh graph has been generated.")
+            echo("System: Composite bokeh graph has been generated.")
 
     def _write_outputs(self):
         """
             Creates all the output files
         """
-
+        # Suppress pandas warning about chained assignment, copies of dataframes are never assigned back to original
+        pd.options.mode.chained_assignment = None
         #########################
         # Create necessary variables for generic metadata file, as well as
         # generate and fill metadata file
@@ -822,7 +832,7 @@ class WeatherQAQC:
         #     Delta : Magnitude of difference between original data and corrected data
         #     Filled Data : Tracks which data points have been filled by script generated values instead of provided
         # Data that is provided and subsequently corrected by the script do not count as filled values.
-        print("\nSystem: Saving corrected data to .xslx file.")
+        echo("System: Saving corrected data to .xslx file.")
 
         # Create any individually-requested output data
         ws_2m = _wind_height_adjust(uz=self.data_ws, zw=self.ws_anemometer_height)
@@ -883,21 +893,17 @@ class WeatherQAQC:
         delta_df.index.name = 'date'
         fill_df.index.name = 'date'
         # Open up pandas excel writer
-        output_writer = pd.ExcelWriter(self.output_file_path, engine='xlsxwriter')
-        # Convert data frames to xlsxwriter excel objects
-        output_df.to_excel(output_writer, sheet_name='Corrected Data', na_rep=self.missing_fill_value)
-        delta_df.to_excel(output_writer, sheet_name='Delta (Corr - Orig)', na_rep=self.missing_fill_value)
-        fill_df.to_excel(output_writer, sheet_name='Filled Data', na_rep=self.missing_fill_value)
-        # Save output file
-        output_writer.save()
+        with pd.ExcelWriter(self.output_file_path, date_format='YYYY-MM-DD', datetime_format='YYYY-MM-DD',
+                            engine='openpyxl', mode='w') as writer:
+            output_df.to_excel(writer, sheet_name='Corrected Data', na_rep=self.missing_fill_value)
+            delta_df.to_excel(writer, sheet_name='Delta (Corr - Orig)', na_rep=self.missing_fill_value)
+            fill_df.to_excel(writer, sheet_name='Filled Data', na_rep=self.missing_fill_value)
 
         logger = open(self.log_file, 'a')
         if self.script_mode == 1 and self.fill_mode == 1:
             if np.isnan(self.eto).any() or np.isnan(self.etr).any():
-                print("\nSystem: After finishing corrections and filling data, "
-                      "ETr and ETo still had missing observations.")
-                logger.write('After finishing corrections and filling data, '
-                             'ETr and ETo still had missing observations. \n')
+                echo("System: After finishing corrections and filling data,ETr and ETo still had missing observations.")
+                logger.write('After corrections and filling data,ETr and ETo still had missing observations. \n')
             else:
                 logger.write('The output file for this station has a complete record of ETo and ETr observations. \n')
         else:
@@ -916,4 +922,4 @@ class WeatherQAQC:
 
 # This is never run by itself
 if __name__ == "__main__":
-    print("\nThis module is called as a part of the QAQC script, it does nothing by itself.")
+    echo("This module is called as a part of the QAQC script, it does nothing by itself.")
